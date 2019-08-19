@@ -23,6 +23,7 @@
 #include <pwd.h>
 
 #define TMP_DIR_NAME "/tmp/container."
+#define ROOTFS_LOCATION "/opt/ns/rootfs"
 #define ROOTFS_SIZE "100m"
 #define ROOTFS_INODES "10k"
 #define MEMORY 1024*1024*1024 // 1GB
@@ -53,53 +54,6 @@ void setup_namespaces()
     }
 
     printf("done\n");
-}
-
-void remove_dir(const char *source)
-{
-	DIR *dir = opendir(source);
-	if (dir == NULL)
-	{
-		perror("opendir");
-		printf("%s\n", source);
-		exit(1);
-	}
-	char path[256] = {0}, *endptr = path;
-	struct dirent *e;
-	strcpy(path, source);
-	strcat(path, "/");
-	endptr += strlen(source)+1;
-	while ((e = readdir(dir)) != NULL)
-	{
-		struct stat info;
-		if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)
-		{
-			continue;
-		}
-		strcpy(endptr, e->d_name);
-		if (!lstat(path, &info))
-		{
-			if (S_ISLNK(info.st_mode))
-			{
-				unlink(path);
-			}
-			else if (S_ISDIR(info.st_mode))
-			{
-				remove_dir(path);
-			}
-			else if (S_ISREG(info.st_mode))
-			{
-				unlink(path);
-			}
-		}
-	}
-	if (rmdir(source))
-	{
-		perror("rmdir");
-		exit(1);
-	}
-	closedir(dir);
-
 }
 
 int cp(const char *to, const char *from)
@@ -742,8 +696,14 @@ int main(int argc, char **argv)
 	char *username = strdup(pw->pw_name);
 	
 	char *rootfs;
-    rootfs = "/opt/ns/rootfs"; // rootfs is our first argument
-    // the rest contains the binary to start and their arguments
+    rootfs = ROOTFS_LOCATION;
+
+    char **a = argv;
+    while (*a != NULL)
+	{
+		printf("argv: %s\n", *a);
+		a++;
+	}
 
     // setup namespaces
     setup_namespaces();
@@ -815,12 +775,45 @@ int main(int argc, char **argv)
 			// This is ok, we are still inside the container, just not inside the home
 		}
 
+		// install tini as init
 		install_init();
 
+		// merge argv into _argv
+		argv++; // jump over binary name
+		char **it = argv;
+		char **_argv;
+		if (*it == NULL)
+		{
+			// no arguments given, use normal /bin/ash
+			_argv = calloc(4, sizeof(char *));
+        	_argv[0] = "/sbin/tini";
+        	_argv[1] = "--";
+        	_argv[2] = SHELL;
+        }
+		else
+		{
+			// first, find out how many slots we need
+			int num = 4; // 3 for tini, -- and /bin/ash and 1 for trailing NULL
+			while (*it != NULL)
+			{
+				num++;
+				it++;
+			}
+			_argv = calloc(num, sizeof(char *));
+			num = 3;
+			_argv[0] = "/sbin/tini";
+			_argv[1] = "--";
+			_argv[2] = SHELL;
+			it = argv;
+			while (*it != NULL)
+			{
+				_argv[num++] = *it;
+				it++;
+			}
+		}
+        
         // and execute!
         printf("=> Executing, see you on the other side\n");
-        //extern char **environ;
-        char *_argv[] = { "/sbin/tini", "--", SHELL, NULL };
         if (execve(_argv[0], _argv, envp) < 0)
 		{
 			perror("execve");
