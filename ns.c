@@ -20,12 +20,13 @@
 #include <errno.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <pwd.h>
 
-#define TMP_DIR_NAME "/tmp/container.XXXXXX"
+#define TMP_DIR_NAME "/tmp/container."
+#define ROOTFS_SIZE "100m"
+#define ROOTFS_INODES "10k"
 #define MEMORY 1024*1024*1024 // 1GB
 #define SHELL "/bin/ash"
-
-char *mount_path;
 
 int pivot_root(const char *new_root, const char *put_old)
 {
@@ -52,14 +53,6 @@ void setup_namespaces()
     }
 
     printf("done\n");
-}
-
-void remove_dir(const char *source);
-
-void remove_tmp_dir()
-{
-	remove_dir(mount_path);
-	free(mount_path);
 }
 
 void remove_dir(const char *source)
@@ -205,57 +198,84 @@ void copy_rootfs(const char *source, char *dest)
 			}
 			else if (S_ISDIR(info.st_mode))
 			{
-				mkdir(dpath, 0755);
+				if (mkdir(dpath, 0755) < 0)
+				{
+					perror("mkdir");
+					continue;
+				}
 				copy_rootfs(path, dpath);
 				chmod(dpath, info.st_mode);
 			}
 			else if (S_ISREG(info.st_mode))
 			{
-				cp(dpath, path);
+				if (cp(dpath, path) < 0)
+				{
+					perror("cp");
+					continue;
+				}
 				chmod(dpath, info.st_mode);
 			}
 		}
 	}
 }
 
-void setup_sandbox(const char *rootfs, char **mount_dir)
+void setup_sandbox(const char *rootfs, const char *username)
 {
     printf("=> Remounting / as private and mounting rootfs... ");fflush(stdout);
 
     // mount / as private (--make-rpivate) to not leak changes upward
-    if (mount("none", "/", NULL, MS_REC | MS_PRIVATE, NULL)) // NULL as first argument also works
+    if (mount("none", "/", NULL, MS_REC | MS_PRIVATE, NULL) < 0) // NULL as first argument also works
     {
         perror("mount /");
         exit(1);
     }
 
 	// creating the upper directory for the overlay
-	*mount_dir = malloc(strlen(TMP_DIR_NAME)+1);
-    strcpy(*mount_dir, TMP_DIR_NAME);
+	char mount_dir[256] = {0};
+	snprintf(mount_dir, 256, "%s%s", TMP_DIR_NAME, username);
 
-    if (!mkdtemp(*mount_dir))
-    {
-        perror("mkdtemp");
-        exit(1);
-    }
+	// check if folder exists
+	struct stat s;
+	if (lstat(mount_dir, &s) < 0)
+	{
+		if (errno != ENOENT)
+		{
+			perror("lstat");
+			exit(1);
+		}
 
+    	if (mkdir(mount_dir, 0766) < 0)
+		{
+        	perror("mkdir");
+        	exit(1);
+		}
+	}
 
+	// mount a tmpfs onto mount_dir for our rootfs
+	if (mount("sandbox-rootfs-tmpfs", mount_dir, "tmpfs", 0, "size=" ROOTFS_SIZE ",mode=755,nr_inodes=" ROOTFS_INODES) < 0)
+	{
+		perror("mount rootfs tmpfs");
+		exit(1);
+	}
 	
-    copy_rootfs(rootfs, *mount_dir);
+    copy_rootfs(rootfs, mount_dir);
 
     // copy /etc/resolv.conf
     char path[256] = {0};
-    snprintf(path, 256, "%s/etc/resolv.conf", *mount_dir);
-    cp(path, "/etc/resolv.conf");
+    snprintf(path, 256, "%s/etc/resolv.conf", mount_dir);
+    if (cp(path, "/etc/resolv.conf") != 0)
+	{
+		perror("cp resolv.conf");
+	}
 
-    if (mount(*mount_dir, *mount_dir, NULL, MS_BIND | MS_NOSUID, NULL) < 0)
+    if (mount(mount_dir, mount_dir, NULL, MS_BIND | MS_REMOUNT | MS_NOSUID, NULL) < 0)
     {
         perror("mount rootfs");
         exit(1);
 	}
 
     // change to rootfs
-    if (chdir(*mount_dir))
+    if (chdir(mount_dir))
     {
         perror("chdir rootfs");
         exit(1);
@@ -444,7 +464,8 @@ void setup_home()
 	if (mount(home, "root", NULL, MS_BIND, NULL))
 	{
 		perror("mount home");
-		exit(1);
+		printf("home: %s\n", home);
+		//exit(1);
 	}
 
 	printf("done\n");
@@ -712,18 +733,26 @@ int main(int argc, char **argv)
     pid_t childpid;
     uid_t uid = getuid();
     gid_t gid = getgid();
-    char *rootfs;
+	struct passwd *pw = getpwuid(uid);
+	if (pw == NULL)
+	{
+		perror("getpwuid");
+		exit(1);
+	}
+	char *username = strdup(pw->pw_name);
+	
+	char *rootfs;
     rootfs = "/opt/ns/rootfs"; // rootfs is our first argument
     // the rest contains the binary to start and their arguments
 
     // setup namespaces
     setup_namespaces();
 
-    // setup sandbox
-    setup_sandbox(rootfs, &mount_path);
-
     // setup id maps
     setup_id_maps(uid, gid);
+
+	// setup sandbox
+    setup_sandbox(rootfs, username);
 
     // setup minmal dev
     setup_fake_dev();
@@ -803,8 +832,6 @@ int main(int argc, char **argv)
     printf("-- Now executing child %d\n", childpid);
 
     waitpid(childpid, NULL, 0); // Wait for child termination
-
-	remove_tmp_dir();
 
 	return 0;
 }
