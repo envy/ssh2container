@@ -212,7 +212,9 @@ void setup_sandbox(const char *rootfs, const char *username)
     }
 
 #if ROOTFS_PERSISTENT
-    if (mount(rootfs, rootfs, NULL, MS_BIND | MS_NOSUID, NULL) < 0)
+	(void)username;
+
+	if (mount(rootfs, rootfs, NULL, MS_BIND | MS_NOSUID, NULL) < 0)
     {
         perror("mount rootfs");
         exit(1);
@@ -258,7 +260,11 @@ void setup_sandbox(const char *rootfs, const char *username)
 
     // copy /etc/resolv.conf
     char path[256] = {0};
-    snprintf(path, 256, "%s/etc/resolv.conf", mount_dir);
+    if (snprintf(path, 256, "%s/etc/resolv.conf", mount_dir) < 0)
+	{
+		perror("snprintf resolv.conf");
+		exit(1);
+	}
     if (cp(path, "/etc/resolv.conf") != 0)
 	{
 		perror("cp resolv.conf");
@@ -600,26 +606,84 @@ void filter_syscalls()
         || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(fchmod), 1, SCMP_A1(SCMP_CMP_MASKED_EQ, S_ISGID, S_ISGID))
         || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(fchmodat), 1, SCMP_A2(SCMP_CMP_MASKED_EQ, S_ISUID, S_ISUID))
         || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(fchmodat), 1, SCMP_A2(SCMP_CMP_MASKED_EQ, S_ISGID, S_ISGID))
-        // Do not allow creationg of new user namespaces
+        // Do not allow creation of new user namespaces
         || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(unshare), 1, SCMP_A0(SCMP_CMP_MASKED_EQ, CLONE_NEWUSER, CLONE_NEWUSER))
         || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(clone), 1, SCMP_A2(SCMP_CMP_MASKED_EQ, CLONE_NEWUSER, CLONE_NEWUSER))
+        // Prevent joining other namespaces
+        || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(setns), 0)
         // Do not allow the TIOCSTI ioctl
         || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(ioctl), 1, SCMP_A1(SCMP_CMP_EQ, TIOCSTI))
         // Prevent access to kernel keyring
         || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(keyctl), 0)
         || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(add_key), 0)
         || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(request_key), 0)
-        // Prevent ptrace as kernel < 4.8
+        // Prevent ptrace
         || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(ptrace), 0)
         // Prevent access to NUMA syscalls
         || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(mbind), 0)
         || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(migrate_pages), 0)
         || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(move_pages), 0)
         || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(set_mempolicy), 0)
+        || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(get_mempolicy), 0)
         // Prevent user mode page fault handlers
         || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(userfaultfd), 0)
         // Prevent perf in case of perf_event_paranoid < 2
         || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(perf_event_open), 0)
+        // Prevent accounting 
+        || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(acct), 0)
+        || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(quotactl), 0)
+        // Prevent bpf
+        || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(bpf), 0)
+        // Prevent setting time/date
+        || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(clock_adjtime), 0)
+        || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(clock_settime), 0)
+        || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(settimeofday), 0)
+        || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(stime), 0)
+        // Prevent modifications to kernel modules
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(create_module), 0)
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(delete_module), 0)
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(finit_module), 0)
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(init_module), 0)
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(query_module), 0)
+		// Prevent access to kernel symbols
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(get_kernel_syms), 0)
+		// Prevent modifications of kernel io privilege levels
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(iopl), 0)
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(ioperm), 0)
+		// Prevent process inspection
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(kcmp), 0)
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(lookup_dcookie), 0)
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(process_vm_readv), 0)
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(process_vm_writev), 0)
+		// Prevent loding new kernels
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(kexec_file_load), 0)
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(kexec_load), 0)
+		// Prevent mount/umount
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(mount), 0)
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(umount), 0)
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(umount2), 0)
+		// Prevent old container exploits
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(name_to_handle_at), 0)
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(open_by_handle_at), 0)
+		// Prevent access to nfs kernel daemon
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(nfsservctl), 0)
+		// Prevent BSD emulation
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(personality), 0)
+		// Prevent pivot_root
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(pivot_root), 0)
+		// Prevent reboot
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(reboot), 0)
+		// Prevent swap control
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(swapon), 0)
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(swapoff), 0)
+		// Prevent obsolete syscalls
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(sysfs), 0)
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(_sysctl), 0)
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(ustat), 0)
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(uselib), 0)
+		// Prevent access to in-kernel x86 real mode vm
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(vm86), 0)
+		|| seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(vm86old), 0)
         // Prevent setuid/setcap binaries form executing
         || seccomp_attr_set(ctx, SCMP_FLTATR_CTL_NNP, 0)
         )
@@ -656,10 +720,13 @@ void drop_capabilities()
         CAP_MKNOD,
         CAP_SETFCAP,
         CAP_SYSLOG,
+        CAP_SYS_BOOT,
         CAP_SYS_ADMIN,
         CAP_SYS_BOOT,
         CAP_SYS_MODULE,
         CAP_SYS_NICE,
+        CAP_SYS_PACCT,
+        CAP_SYS_PTRACE,
         CAP_SYS_RAWIO,
         CAP_SYS_RESOURCE,
         CAP_SYS_TIME,
