@@ -30,6 +30,14 @@
 #define MEMORY 1024*1024*1024 // 1GB
 #define SHELL "/bin/ash"
 
+#ifndef ROOTFS_PERSISTENT
+#define ROOTFS_PERSISTENT 0
+#endif
+
+#ifndef USE_TINI
+#define USE_TINI 1
+#endif
+
 #ifndef DEBUG
 #define DEBUG 0
 #endif
@@ -203,8 +211,22 @@ void setup_sandbox(const char *rootfs, const char *username)
         exit(1);
     }
 
-	// creating the upper directory for the overlay
+#if ROOTFS_PERSISTENT
+    if (mount(rootfs, rootfs, NULL, MS_BIND | MS_NOSUID, NULL) < 0)
+    {
+        perror("mount rootfs");
+        exit(1);
+	}
+
+    // change to rootfs
+    if (chdir(rootfs))
+    {
+        perror("chdir rootfs");
+        exit(1);
+    }
+#else
 	char mount_dir[256] = {0};
+	// creating the temp directory
 	snprintf(mount_dir, 256, "%s%s", TMP_DIR_NAME, username);
 
 	// check if folder exists
@@ -217,7 +239,7 @@ void setup_sandbox(const char *rootfs, const char *username)
 			exit(1);
 		}
 
-    	if (mkdir(mount_dir, 0766) < 0)
+    	if (mkdir(mount_dir, 0755) < 0)
 		{
         	perror("mkdir");
         	exit(1);
@@ -231,6 +253,7 @@ void setup_sandbox(const char *rootfs, const char *username)
 		exit(1);
 	}
 	
+	debug("copying rootfs... ");
     copy_rootfs(rootfs, mount_dir);
 
     // copy /etc/resolv.conf
@@ -253,6 +276,7 @@ void setup_sandbox(const char *rootfs, const char *username)
         perror("chdir rootfs");
         exit(1);
     }
+#endif
 
     debug("done\n");
 }
@@ -799,8 +823,9 @@ int main(int argc, char **argv)
 		}
 
 		// install tini as init
-		install_init();
+		//install_init();
 
+#if USE_TINI
 		// merge argv into _argv
 		argv++; // jump over binary name
 		char **it = argv;
@@ -834,7 +859,11 @@ int main(int argc, char **argv)
 				it++;
 			}
 		}
-        
+#else
+		argv++;
+		char *_argv[] = { SHELL, NULL };
+#endif
+
         // and execute!
         debug("=> Executing, see you on the other side\n");
         if (execve(_argv[0], _argv, envp) < 0)
