@@ -2,6 +2,7 @@
 #include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <signal.h>
 #include <string.h>
 #include <sys/types.h>
@@ -29,6 +30,24 @@
 #define MEMORY 1024*1024*1024 // 1GB
 #define SHELL "/bin/ash"
 
+#ifndef DEBUG
+#define DEBUG 0
+#endif
+void debug(const char *format, ...)
+#if DEBUG
+{
+	va_list args;
+	va_start(args, format);
+	vprintf(format, args);
+	fflush(stdout);
+	va_end(args);
+}
+#else
+{
+	(void)format;
+}
+#endif
+
 int pivot_root(const char *new_root, const char *put_old)
 {
     return syscall(SYS_pivot_root, new_root, put_old);
@@ -45,7 +64,7 @@ void setup_namespaces()
     //namespaces |= CLONE_NEWCGROUP; // New cgroup namespace
     //namespaces |= CLONE_NEWNET;  // New network namespace, requires CAP_SYS_ADMIN
 
-    printf("=> Creating namespaces... ");fflush(stdout);
+    debug("=> Creating namespaces... ");
 
     if (unshare(namespaces) != 0)
     {
@@ -53,7 +72,7 @@ void setup_namespaces()
         exit(1);
     }
 
-    printf("done\n");
+    debug("done\n");
 }
 
 int cp(const char *to, const char *from)
@@ -175,7 +194,7 @@ void copy_rootfs(const char *source, char *dest)
 
 void setup_sandbox(const char *rootfs, const char *username)
 {
-    printf("=> Remounting / as private and mounting rootfs... ");fflush(stdout);
+    debug("=> Remounting / as private and mounting rootfs... ");
 
     // mount / as private (--make-rpivate) to not leak changes upward
     if (mount("none", "/", NULL, MS_REC | MS_PRIVATE, NULL) < 0) // NULL as first argument also works
@@ -235,7 +254,7 @@ void setup_sandbox(const char *rootfs, const char *username)
         exit(1);
     }
 
-    printf("done\n");
+    debug("done\n");
 }
 
 void setup_id_maps(uid_t uid, gid_t gid)
@@ -244,7 +263,7 @@ void setup_id_maps(uid_t uid, gid_t gid)
     uid_t newuid = 0;
     gid_t newgid = 0;
 
-    printf("=> Mapping %d/%d to 0/0... ", uid, gid);fflush(stdout);
+    debug("=> Mapping %d/%d to 0/0... ", uid, gid);
 
     // map new UID/GID to outer UID/GID
     sprintf(buf, "%d %d 1\n", newuid, uid);
@@ -293,12 +312,12 @@ void setup_id_maps(uid_t uid, gid_t gid)
     setresgid(newgid, newgid, newgid);
     setresuid(newuid, newuid, newuid);
 
-    printf("done\n");
+    debug("done\n");
 }
 
 void setup_fake_dev()
 {
-    printf("=> Creating minimal /dev... ");fflush(stdout);
+    debug("=> Creating minimal /dev... ");
 
     // Delete and recreate dev
     if (rmdir("dev") < 0)
@@ -365,19 +384,20 @@ void setup_fake_dev()
         exit(1);
     }
 
+	// and remount readonly
     if (mount("sandbox-dev", "dev", NULL, MS_REMOUNT | MS_BIND | MS_NOSUID | MS_NODEV | MS_NOEXEC | MS_NOATIME | MS_RDONLY, NULL) < 0)
     {
         perror("remount dev");
         exit(1);
     }
 
-    printf("done\n");
+    debug("done\n");
 }
 
 
 void setup_tmp()
 {
-    printf("=> Creating /tmp... ");fflush(stdout);
+    debug("=> Creating /tmp... ");
 
     if (rmdir("tmp") < 0)
     {
@@ -400,12 +420,12 @@ void setup_tmp()
         exit(1);
     }
 
-    printf("done\n");
+    debug("done\n");
 }
 
 void setup_home()
 {
-	printf("=> Mounting home... ");fflush(stdout);
+	debug("=> Mounting home... ");
 
 	char *home = getenv("HOME");
 	if (home == NULL)
@@ -422,12 +442,12 @@ void setup_home()
 		//exit(1);
 	}
 
-	printf("done\n");
+	debug("done\n");
 }
 
 void setup_proc()
 {
-    printf("=> Mounting old /proc... ");fflush(stdout);
+    debug("=> Mounting old /proc... ");
 
     rmdir(".oldproc");
     rmdir("proc");
@@ -441,12 +461,12 @@ void setup_proc()
         exit(1);
     }
 
-    printf("done\n");
+    debug("done\n");
 }
 
 void setup_root()
 {
-    printf("=> Pivoting root... ");fflush(stdout);
+    debug("=> Pivoting root... ");
 
     // delete old dirs and create new ones
     rmdir(".oldroot");
@@ -462,12 +482,12 @@ void setup_root()
     umount2(".oldroot", MNT_DETACH);
     rmdir(".oldroot");
 
-    printf("done\n");
+    debug("done\n");
 }
 
 void setup_proc_2()
 {
-    printf("=> Mounting new /proc... "); fflush(stdout);
+    debug("=> Mounting new /proc... ");
 
     // mount proc for correct pids
     if (mount("sandbox-proc", "/proc", "proc", MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL) < 0)
@@ -486,12 +506,12 @@ void setup_proc_2()
         perror("delete oldproc");
     }
 
-    printf("done\n");
+    debug("done\n");
 }
 
 void setup_root_2()
 {
-    printf("=> Really mounting rootfs now... ");fflush(stdout);
+    debug("=> Really mounting rootfs now... ");
 
     if (mount("/", "/", NULL, MS_BIND | MS_REMOUNT, NULL) < 0)
     {
@@ -499,12 +519,12 @@ void setup_root_2()
         exit(1);
     }
 
-    printf("done\n");
+    debug("done\n");
 }
 
 void mask_proc()
 {
-    printf("=> Masking sensitive proc files... ");fflush(stdout);
+    debug("=> Masking sensitive proc files... ");
 
     if(mount("/dev/null", "/proc/sched_debug", NULL, MS_BIND, NULL) < 0)
     {
@@ -512,12 +532,12 @@ void mask_proc()
         exit(1);
     }
 
-    printf("done\n");
+    debug("done\n");
 }
 
 void restrict_resources()
 {
-    printf("=> Restricting resource usage... ");fflush(stdout);
+    debug("=> Restricting resource usage... ");
 
     struct rlimit memlimit;
     memlimit.rlim_cur = MEMORY;
@@ -532,7 +552,7 @@ void restrict_resources()
         perror("setrlimit");
     }
 
-    printf("done\n");
+    debug("done\n");
 }
 
 #define SCMP_FAIL SCMP_ACT_ERRNO(EPERM)
@@ -540,7 +560,7 @@ void filter_syscalls()
 {
     scmp_filter_ctx ctx = NULL;
     int rc = 0;
-    printf("=> Filtering system calls... ");fflush(stdout);
+    debug("=> Filtering system calls... ");
 
     if (!(ctx = seccomp_init(SCMP_ACT_ALLOW)))
     {
@@ -549,7 +569,7 @@ void filter_syscalls()
     }
 
     if (0
-        // Do not allow ???
+        // Do not allow setuid/setgid bit setting
         || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(chmod), 1, SCMP_A1(SCMP_CMP_MASKED_EQ, S_ISUID, S_ISUID))
         || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(chmod), 1, SCMP_A1(SCMP_CMP_MASKED_EQ, S_ISGID, S_ISGID))
         || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(fchmod), 1, SCMP_A1(SCMP_CMP_MASKED_EQ, S_ISUID, S_ISUID))
@@ -592,12 +612,12 @@ void filter_syscalls()
     }
 
     seccomp_release(ctx);
-    printf("done\n");
+    debug("done\n");
 }
 
 void drop_capabilities()
 {
-    printf("=> Dropping capabilities... "); fflush(stdout);
+    debug("=> Dropping capabilities... ");
 
     int drop_caps[] = {
         CAP_AUDIT_CONTROL,
@@ -623,7 +643,7 @@ void drop_capabilities()
     };
 
     size_t num_caps = sizeof(drop_caps) / sizeof(*drop_caps);
-    printf("bounding... "); fflush(stdout);
+    debug("bounding... ");
     for (size_t i = 0; i < num_caps; i++)
     {
         if (prctl(PR_CAPBSET_DROP, drop_caps[i], 0, 0, 0))
@@ -633,7 +653,7 @@ void drop_capabilities()
         }
     }
 
-    printf("inheritable... "); fflush(stdout);
+    debug("inheritable... ");
     cap_t caps = NULL;
     if (!(caps = cap_get_proc())
         || cap_set_flag(caps, CAP_INHERITABLE, num_caps, drop_caps, CAP_CLEAR)
@@ -646,7 +666,7 @@ void drop_capabilities()
     }
     cap_free(caps);
 
-    printf("done\n");
+    debug("done\n");
 }
 
 void run_command(char **argv)
@@ -672,12 +692,12 @@ void run_command(char **argv)
 
 void install_init()
 {
-	printf("=> Installing tini... ");fflush(stdout);
+	debug("=> Installing tini... ");fflush(stdout);
 
 	char *argv[] = { "/sbin/apk", "add", "--no-cache", "tini", NULL };
 	run_command(argv);
 
-	printf("done\n");
+	debug("done\n");
 }
 
 int main(int argc, char **argv)
@@ -698,12 +718,15 @@ int main(int argc, char **argv)
 	char *rootfs;
     rootfs = ROOTFS_LOCATION;
 
+#if DEBUG
     char **a = argv;
     while (*a != NULL)
 	{
-		printf("argv: %s\n", *a);
+		debug("[%s] ", *a);
 		a++;
 	}
+	debug("\n");
+#endif
 
     // setup namespaces
     setup_namespaces();
@@ -813,7 +836,7 @@ int main(int argc, char **argv)
 		}
         
         // and execute!
-        printf("=> Executing, see you on the other side\n");
+        debug("=> Executing, see you on the other side\n");
         if (execve(_argv[0], _argv, envp) < 0)
 		{
 			perror("execve");
@@ -822,7 +845,7 @@ int main(int argc, char **argv)
     }
     // else we are in parent
 
-    printf("-- Now executing child %d\n", childpid);
+    debug("-- Now executing child %d\n", childpid);
 
     waitpid(childpid, NULL, 0); // Wait for child termination
 
