@@ -191,8 +191,9 @@ void copy_rootfs(const char *source, char *dest)
 			{
 				if (cp(dpath, path) < 0)
 				{
+					printf("could not copy %s to %s\n", path, dpath);
 					perror("cp");
-					continue;
+					exit(1);
 				}
 				chmod(dpath, info.st_mode);
 			}
@@ -765,7 +766,7 @@ void run_command(char **argv)
 	pid_t pid = fork();
 	if (pid < 0)
 	{
-		perror("fork");
+		perror("fork run command");
 		exit(1);
 	}
 	if (pid == 0)
@@ -846,7 +847,7 @@ int main(int argc, char **argv)
     // Now fork!
     childpid = fork();
     if (childpid < 0) {
-        perror("fork");
+        perror("fork container");
         exit(1);
     }
 
