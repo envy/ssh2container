@@ -29,7 +29,7 @@
 #define ROOTFS_SIZE "150m"
 #define ROOTFS_INODES "15k"
 #define MEMORY 1024*1024*1024 // 1GB
-#define SHELL "/bin/ash"
+#define SHELL "/bin/sh"
 
 #ifndef ROOTFS_PERSISTENT
 #define ROOTFS_PERSISTENT 0
@@ -482,7 +482,7 @@ void setup_id_maps(uid_t uid, gid_t gid)
     debug("=> Mapping %d/%d to 0/0... ", uid, gid);
 
     // map new UID/GID to outer UID/GID
-    sprintf(buf, "%d %d 1\n", newuid, uid);
+    snprintf(buf, 1024, "%d %d 1\n", newuid, uid);
     int fd = open("/proc/self/uid_map", O_WRONLY);
     if (fd < 0)
     {
@@ -506,7 +506,7 @@ void setup_id_maps(uid_t uid, gid_t gid)
         write(fd, "deny", 4);
         close(fd);
     }
-    sprintf(buf, "%d %d 1\n", newgid, gid);
+    snprintf(buf, 1024, "%d %d 1\n", newgid, gid);
     fd = open("/proc/self/gid_map", O_WRONLY);
     if (fd < 0)
     {

@@ -2,7 +2,8 @@ ssh2container
 =============
 
 Useable as a login shell which spawns a container for each login. Containers are ephemeral and live completely in memory.
-This uses user, mount, IPC, PID and UTS namespaces, a tmpfs and a tiny rootfs (e.g. alpine linux) as a base image.
+This uses user, mount, IPC, PID and UTS namespaces, a tmpfs and a tiny rootfs (e.g. alpine linux) as a base image. It does not require root.
+Certain system calls are filtered with seccomp and capabilities are dropped with libcap.
 
 How to use
 ----------
@@ -22,7 +23,13 @@ Q: Why?
 A: Why not? Mainly to learn how to use namespaces without fancy container engines.
 
 Q: This already exists: https://github.com/Yelp/dockersh
-A: Yes, but dockersh uses Docker and does not use user namespaces.
+A: Yes, but dockersh uses Docker and does not use user namespaces. Also this was mainly done as a learning experience.
+
+Q: This already exists: https://firejail.wordpress.com
+A: Yes, but firejail is using setuid and not chroot instead of pivot\_root. chroot is not meant for sandboxing. Also this was mainly done as a learning experience.
+
+Q: This already exists: FreeBSD jails
+A: Yes, but this work on linux. Also this was mainly done as a learning experience.
 
 Q: Is this secure?
 A: I don't know. Maybe, maybe not. You should probably not run this in production without audting the code.
