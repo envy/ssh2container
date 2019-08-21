@@ -1,27 +1,28 @@
 #define _GNU_SOURCE
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <pwd.h>
 #include <sched.h>
+#include <seccomp.h>
+#include <signal.h>
+#include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdarg.h>
-#include <signal.h>
 #include <string.h>
-#include <sys/types.h>
-#include <sys/wait.h>
+#include <sys/capability.h>
 #include <sys/mman.h>
 #include <sys/mount.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <sys/syscall.h>
 #include <sys/prctl.h>
-#include <sys/capability.h>
-#include <sys/time.h>
 #include <sys/resource.h>
-#include <seccomp.h>
-#include <fcntl.h>
-#include <errno.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
-#include <dirent.h>
-#include <pwd.h>
 
 #define TMP_DIR_NAME "/tmp/container."
 #define ROOTFS_LOCATION "/opt/ns/rootfs"
@@ -142,6 +143,63 @@ int cp(const char *to, const char *from)
     return -1;
 }
 
+typedef struct __link_list {
+	struct __link_list *next;
+	ino_t inode;
+	char path[256];
+} link_list_t;
+
+link_list_t *link_list = NULL;
+
+void link_list_add(ino_t inode, const char *path)
+{
+	link_list_t *new_elem = calloc(1, sizeof(link_list_t));
+	new_elem->inode = inode;
+	strncpy(new_elem->path, path, 256);
+
+	if (link_list == NULL)
+	{
+		link_list = new_elem;
+		return;
+	}
+
+	link_list_t *it = link_list;
+	while (it->next != NULL)
+	{
+		it = it->next;
+	}
+
+	it->next = new_elem;
+}
+
+link_list_t *link_list_find(ino_t inode)
+{
+	if (link_list == NULL)
+	{
+		return NULL;
+	}
+
+	link_list_t *it = link_list;
+	while (it != NULL && it->inode != inode)
+	{
+		it = it->next;
+	}
+
+	return it;
+}
+
+void link_list_clear()
+{
+	link_list_t *it = link_list;
+	link_list = NULL;
+	while(it != NULL)
+	{
+		link_list_t *temp = it;
+		it = it->next;
+		free(temp);
+	}
+}
+
 void copy_rootfs(const char *source, char *dest)
 {
 	DIR *dir = opendir(source);
@@ -165,11 +223,31 @@ void copy_rootfs(const char *source, char *dest)
 		strcpy(endptr, e->d_name);
 		if (!lstat(path, &info))
 		{
+			bool add_hardlink = false;
 			char dpath[256] = {0}, *dendptr = dpath;
 			strcpy(dpath, dest);
 			strcat(dpath, "/");
 			dendptr += strlen(dest)+1;
 			strcpy(dendptr, e->d_name);
+
+			// Check if more than one hardlink exists
+			if (info.st_nlink > 1)
+			{
+				debug("more than one hardlink (%d) to %s \n", info.st_nlink, path);
+				// Check if we already have copiedthe links destination
+				link_list_t *file = link_list_find(info.st_ino);
+				if (file != NULL)
+				{
+					// We have, create a link
+					link(file->path, dpath);
+					continue;
+				}
+				else
+				{
+					add_hardlink = true;
+				}
+			}
+
 			if (S_ISLNK(info.st_mode))
 			{
 				char target[256] = {0};
@@ -196,6 +274,10 @@ void copy_rootfs(const char *source, char *dest)
 					exit(1);
 				}
 				chmod(dpath, info.st_mode);
+				if (add_hardlink)
+				{
+					link_list_add(info.st_ino, dpath);
+				}
 			}
 		}
 	}
@@ -258,6 +340,7 @@ void setup_sandbox(const char *rootfs, const char *username)
 	
 	debug("copying rootfs... ");
     copy_rootfs(rootfs, mount_dir);
+	link_list_clear();
 
     // copy /etc/resolv.conf
     char path[256] = {0};
