@@ -26,8 +26,8 @@
 
 #define TMP_DIR_NAME "/tmp/container."
 #define ROOTFS_LOCATION "/opt/ns/rootfs"
-#define ROOTFS_SIZE "100m"
-#define ROOTFS_INODES "10k"
+#define ROOTFS_SIZE "150m"
+#define ROOTFS_INODES "15k"
 #define MEMORY 1024*1024*1024 // 1GB
 #define SHELL "/bin/ash"
 
@@ -77,11 +77,104 @@ void setup_namespaces()
 
     if (unshare(namespaces) != 0)
     {
-        perror("");
+        perror("unshare");
         exit(1);
     }
 
     debug("done\n");
+}
+
+void write_to_file(const char *path, const char *content)
+{
+	int fd = open(path, O_RDWR);
+	if (fd < 0)
+	{
+		debug("Could not open %s\n", path);
+		perror("open");
+		exit(1);
+	}
+
+	int offset = 0, last = 0;
+	while ((last = write(fd, content + offset, strlen(content) - offset)) > 0)
+	{
+		offset += last;
+	}
+	if (last <= 0)
+	{
+		if (errno != 0)
+		{
+			perror("write");
+			exit(1);
+		}
+	}
+
+	close(fd);
+}
+
+void setup_cgroups(uid_t uid)
+{
+	debug("=> Setting up cgroups2... ");
+
+	char path[256];
+	if (snprintf(path, 256, "/sys/fs/cgroup/unified/user.slice/user-%d.slice/user@%d.service", uid, uid) < 0)
+	{
+		perror("snprintf cgroups path");
+		exit(1);
+	}
+
+	debug("cgroups base path: %s ", path);
+
+	char *curpath = NULL;
+	asprintf(&curpath, "%s/ssh2container", path);
+	if (mkdir(curpath, 0755) < 0)
+	{
+		if (errno != EEXIST)
+		{
+			debug("could not create %s\n", curpath);
+			perror("mkdir cgroup parent");
+			exit(1);
+		}
+	}
+
+	free(curpath);
+	asprintf(&curpath, "%s/ssh2container/container-%d", path, getpid());
+	if (mkdir(curpath, 0755) < 0)
+	{
+		if (errno != EEXIST)
+		{
+			perror("mkdir cgroup child");
+			exit(1);
+		}
+	}
+	free(curpath);
+
+	char *pidstring;
+	asprintf(&pidstring, "0\n");
+	asprintf(&curpath, "%s/ssh2container/container-%d/cgroup.procs", path, getpid());
+	write_to_file(curpath, pidstring);
+	free(pidstring);
+	free(curpath);
+
+	if (unshare(CLONE_NEWCGROUP) != 0)
+	{
+		perror("unshare cgroup");
+		exit(1);
+	}
+
+	debug("done\n");
+}
+
+void setup_cgroups_2()
+{
+	debug("Finish cgroups setup... ");
+
+	if (mount("none", "/sys", "cgroup2", 0, NULL) < 0)
+	{
+		perror("mount cgroup");
+		exit(1);
+	}
+
+	debug("done\n");
 }
 
 int cp(const char *to, const char *from)
@@ -218,6 +311,7 @@ void copy_rootfs(const char *source, char *dest)
 		struct stat info;
 		if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)
 		{
+			// Don't get cought in a directory loop..
 			continue;
 		}
 		strcpy(endptr, e->d_name);
@@ -233,7 +327,6 @@ void copy_rootfs(const char *source, char *dest)
 			// Check if more than one hardlink exists
 			if (info.st_nlink > 1)
 			{
-				debug("more than one hardlink (%d) to %s \n", info.st_nlink, path);
 				// Check if we already have copiedthe links destination
 				link_list_t *file = link_list_find(info.st_ino);
 				if (file != NULL)
@@ -250,17 +343,26 @@ void copy_rootfs(const char *source, char *dest)
 
 			if (S_ISLNK(info.st_mode))
 			{
+				// File is a symlink, create that
 				char target[256] = {0};
-				readlink(path, target, 256);
-				symlink(target, dpath);
-				// create link
+				if (readlink(path, target, 256) < 0)
+				{
+					perror("readlink");
+					exit(1);
+				}
+				if (symlink(target, dpath) < 0)
+				{
+					debug("Could not create symlink form %s to %s\n", dpath, target);
+					perror("symlink");
+					exit(1);
+				}
 			}
 			else if (S_ISDIR(info.st_mode))
 			{
 				if (mkdir(dpath, 0755) < 0)
 				{
 					perror("mkdir");
-					continue;
+					exit(1);
 				}
 				copy_rootfs(path, dpath);
 				chmod(dpath, info.st_mode);
@@ -269,7 +371,7 @@ void copy_rootfs(const char *source, char *dest)
 			{
 				if (cp(dpath, path) < 0)
 				{
-					printf("could not copy %s to %s\n", path, dpath);
+					debug("could not copy %s to %s\n", path, dpath);
 					perror("cp");
 					exit(1);
 				}
@@ -552,8 +654,20 @@ void setup_home()
 	if (mount(home, "root", NULL, MS_BIND, NULL))
 	{
 		perror("mount home");
-		printf("home: %s\n", home);
-		//exit(1);
+		exit(1);
+	}
+
+	debug("done\n");
+}
+
+void setup_mnt()
+{
+	debug("=> Mounting /mnt... ");
+
+	if (mount("/mnt", "mnt", NULL, MS_BIND, "ro"))
+	{
+		perror("mount mnt");
+		exit(1);
 	}
 
 	debug("done\n");
@@ -571,7 +685,7 @@ void setup_proc()
 
     if (mount("/proc", ".oldproc", NULL, MS_BIND | MS_REC, NULL) < 0)
     {
-        perror("");
+        perror("mount proc");
         exit(1);
     }
 
@@ -906,8 +1020,10 @@ int main(int argc, char **argv)
     // setup namespaces
     setup_namespaces();
 
-    // setup id maps
+	// setup id maps
     setup_id_maps(uid, gid);
+
+	//setup_cgroups(uid);
 
 	// setup sandbox
     setup_sandbox(rootfs, username);
@@ -923,6 +1039,9 @@ int main(int argc, char **argv)
 
 	// setup home
 	setup_home();
+
+	// setup mnt
+	setup_mnt();
 
     // pivot to rootfs
     setup_root();
@@ -954,17 +1073,18 @@ int main(int argc, char **argv)
 
         restrict_resources(); // remove for materials
 
-        filter_syscalls(); // remove for materials
+        filter_syscalls();
 
-        drop_capabilities(); // remove for materials
+        drop_capabilities();
 
         // sanitize environment
-        char *envp[5];
+        char *envp[6];
         envp[0] = "PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin";
         envp[1] = "LANG=en_US.UTF-8";
         envp[2] = "TERM=xterm-256color";
-        envp[5] = "HOME=/root";
-        envp[4] = NULL;
+        envp[3] = "HOME=/root";
+        envp[4] = "PAGER=less";
+        envp[5] = NULL;
 
         // set working directory to home
         if (chdir("/root") < 0)
