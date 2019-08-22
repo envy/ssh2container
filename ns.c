@@ -30,6 +30,7 @@
 #define ROOTFS_INODES "15k"
 #define MEMORY 1024*1024*1024 // 1GB
 #define SHELL "/bin/sh"
+#define INIT "/sbin/tini"
 
 #ifndef ROOTFS_PERSISTENT
 #define ROOTFS_PERSISTENT 0
@@ -979,16 +980,6 @@ void run_command(char **argv)
 	waitpid(pid, NULL, 0);
 }
 
-void install_init()
-{
-	debug("=> Installing tini... ");fflush(stdout);
-
-	char *argv[] = { "/sbin/apk", "add", "--no-cache", "tini", NULL };
-	run_command(argv);
-
-	debug("done\n");
-}
-
 int main(int argc, char **argv)
 {
 	(void)argc;
@@ -1093,9 +1084,6 @@ int main(int argc, char **argv)
 			// This is ok, we are still inside the container, just not inside the home
 		}
 
-		// install tini as init
-		//install_init();
-
 #if USE_TINI
 		// merge argv into _argv
 		argv++; // jump over binary name
@@ -1105,7 +1093,7 @@ int main(int argc, char **argv)
 		{
 			// no arguments given, use normal /bin/ash
 			_argv = calloc(4, sizeof(char *));
-        	_argv[0] = "/sbin/tini";
+        	_argv[0] = INIT;
         	_argv[1] = "--";
         	_argv[2] = SHELL;
         }
@@ -1120,7 +1108,7 @@ int main(int argc, char **argv)
 			}
 			_argv = calloc(num, sizeof(char *));
 			num = 3;
-			_argv[0] = "/sbin/tini";
+			_argv[0] = INIT;
 			_argv[1] = "--";
 			_argv[2] = SHELL;
 			it = argv;
