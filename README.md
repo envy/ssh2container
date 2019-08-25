@@ -10,7 +10,7 @@ How to use
 ----------
 
 0. The code assumes that it is installed in /opt/ns and the rootfs is located in /opt/ns/rootfs. Other locations might or might not work. Also you need `libcap` and `libseccomp`.
-1. Download a rootfs from somewhere, e.g. find the alpine image on Dockerhub, click on latest and download the tar.gz. (e.g. [https://github.com/alpinelinux/docker-alpine/tree/v3.10/x86_64][here])
+1. Download a rootfs from somewhere, e.g. find the alpine image on Dockerhub, click on latest and download the tar.gz. (e.g. https://github.com/alpinelinux/docker-alpine/tree/v3.10/x86_64)
 2. Extract the rootfs into a `rootfs` folder.
 3. Modify the defines in ns.c to point to the correct rootfs.
 4. Use `./modify-rootfs.sh` to install whatever you want into your base image.
