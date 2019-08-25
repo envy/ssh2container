@@ -1,0 +1,7 @@
+rootfs/
+rootfs
+*.tar.gz
+*.o
+ns
+ns-debug
+ns-persistent

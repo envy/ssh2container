@@ -1,0 +1,8 @@
+---
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 0
+UseTab: ForIndentation
+TabWidth: 4
+BreakBeforeBraces: Allman
+AlignTrailingComments: false
