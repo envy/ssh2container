@@ -5,15 +5,17 @@ Useable as a login shell which spawns a container for each login. Containers are
 This uses user, mount, IPC, PID and UTS namespaces, a tmpfs and a tiny rootfs (e.g. alpine linux) as a base image. It does not require root.
 Certain system calls are filtered with seccomp and capabilities are dropped with libcap.
 
+
 How to use
 ----------
 
 0. The code assumes that it is installed in /opt/ns and the rootfs is located in /opt/ns/rootfs. Also you need `libcap` and `libseccomp`.
 1. Download a rootfs from somewhere, e.g. find the alpine image on Dockerhub, click on latest and download the tar.gz.
 2. Extract the rootfs into a `rootfs` folder.
-3. Use `./modify-rootfs.sh` to install whatever you want into your base image.
-4. Test by executing `ns`.
-5. Switch the login shell of some user to the `ns` binary.
+3. Modify the defines in ns.c to point to the correct rootfs.
+4. Use `./modify-rootfs.sh` to install whatever you want into your base image.
+5. Test by executing `ns`.
+6. Switch the login shell of some user to the `ns` binary.
 
 
 FAQ

@@ -25,7 +25,7 @@
 #include <unistd.h>
 
 #define TMP_DIR_NAME "/tmp/container."
-#define ROOTFS_LOCATION "/opt/ns/rootfs"
+#define ROOTFS_LOCATION "rootfs"
 #define ROOTFS_SIZE "150m"
 #define ROOTFS_INODES "15k"
 #define MEMORY 1024*1024*1024 // 1GB
@@ -997,6 +997,18 @@ int main(int argc, char **argv)
 	
 	char *rootfs;
     rootfs = ROOTFS_LOCATION;
+
+	if (rootfs[0] != '/')
+	{
+		// path is relative, add binary storage directory
+		char *prefix = calloc(1, 256);
+		readlink("/proc/self/exe", prefix, 256);
+		while (prefix[strlen(prefix) - 1] != '/')
+		{
+			prefix[strlen(prefix) - 1] = 0;
+		}
+		asprintf(&rootfs, "%s%s", prefix, ROOTFS_LOCATION);
+	}
 
 #if DEBUG
     char **a = argv;
