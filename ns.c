@@ -177,6 +177,7 @@ void setup_cgroups_2()
 	debug("done\n");
 }
 
+// Taken from here: https://stackoverflow.com/a/2180788
 int cp(const char *to, const char *from)
 {
 	int fd_to, fd_from;
