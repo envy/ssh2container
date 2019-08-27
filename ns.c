@@ -24,7 +24,9 @@
 #include <unistd.h>
 
 #define TMP_DIR_NAME "/tmp/container."
-#define ROOTFS_LOCATION "rootfs"
+#define ROOTFS_PREFIX "/var/lib/ssh2container"
+#define ROOTFS_FOLDER "rootfs"
+#define ROOTFS_LOCATION ROOTFS_PREFIX "/" ROOTFS_FOLDER
 #define ROOTFS_SIZE "150m"
 #define ROOTFS_INODES "15k"
 #define MEMORY (1024 * 1024 * 1024) // 1GB
@@ -301,7 +303,7 @@ void copy_rootfs(const char *source, char *dest)
 	DIR *dir = opendir(source);
 	if (dir == NULL)
 	{
-		perror("opendir");
+		perror("opendir copy rootfs");
 		exit(1);
 	}
 	char path[256] = {0}, *endptr = path;

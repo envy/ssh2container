@@ -21,3 +21,10 @@ ns-persistent: ns-persistent.o
 
 ns-persistent.o: ns.c
 	$(CC) -c $^ $(CFLAGS) -DDEBUG=1 -DROOTFS_PERSISTENT=1 -DUSE_TINI=0 -o $@
+
+install: all
+	cp ns /usr/bin/ssh2container
+	mkdir -p /var/lib/ssh2container
+
+uninstall:
+	rm -f /usr/bin/ssh2container
