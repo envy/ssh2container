@@ -9,13 +9,14 @@ Certain system calls are filtered with seccomp and capabilities are dropped with
 How to use
 ----------
 
-0. The code assumes that it is installed in /opt/ns and the rootfs is located in /opt/ns/rootfs. Other locations might or might not work. Also you need `libcap` and `libseccomp`.
+0. The code assumes that the rootfs is located in /var/lib/ssh2container/rootfs. Other locations have to be specified by changing the defines. Also you need `libcap` and `libseccomp`.
 1. Download a rootfs from somewhere, e.g. find the alpine image on Dockerhub, click on latest and download the tar.gz. (e.g. https://github.com/alpinelinux/docker-alpine/tree/v3.10/x86_64)
-2. Extract the rootfs into a `rootfs` folder.
+2. Extract the rootfs into the `rootfs` folder.
 3. Modify the defines in ns.c to point to the correct rootfs.
 4. Use `./modify-rootfs.sh` to install whatever you want into your base image.
 5. Test by executing `ns`.
-6. Switch the login shell of some user to the `ns` binary.
+6. `make install`
+6. Switch the login shell of some user to the `/usr/bin/ssh2container` binary.
 
 
 FAQ
