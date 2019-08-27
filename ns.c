@@ -240,6 +240,10 @@ out_error:
 	return -1;
 }
 
+/*
+ * Linked list implementation needed for remembering which hardlinks have already been copied and where to.
+ */
+
 typedef struct __link_list
 {
 	struct __link_list *next;
@@ -298,6 +302,9 @@ void link_list_clear()
 	}
 }
 
+/*
+ * Copies the rootfs from its on-disk location into the created tmpfs.
+ */
 void copy_rootfs(const char *source, char *dest)
 {
 	DIR *dir = opendir(source);
@@ -306,28 +313,36 @@ void copy_rootfs(const char *source, char *dest)
 		perror("opendir copy rootfs");
 		exit(1);
 	}
-	char path[256] = {0}, *endptr = path;
+	char path[PATH_MAX] = {0}, *endptr = path;
 	struct dirent *e;
-	strcpy(path, source);
-	strcat(path, "/");
+	int res = 0;
+	if ((res = snprintf(path, PATH_MAX, "%s/", source)) >= PATH_MAX || res < 0)
+	{
+		// String was truncated or error
+		perror("snprintf copy rootfs");
+		exit(1);
+	}
 	endptr += strlen(source) + 1;
 	while ((e = readdir(dir)) != NULL)
 	{
 		struct stat info;
-		if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)
+		if (strncmp(e->d_name, ".", 1) == 0 || strncmp(e->d_name, "..", 2) == 0)
 		{
 			// Don't get cought in a directory loop..
 			continue;
 		}
-		strcpy(endptr, e->d_name);
+		strncpy(endptr, e->d_name, PATH_MAX - strlen(source) - 2); // minus two to ensure a NUL byte at the end
 		if (!lstat(path, &info))
 		{
 			bool add_hardlink = false;
-			char dpath[256] = {0}, *dendptr = dpath;
-			strcpy(dpath, dest);
-			strcat(dpath, "/");
+			char dpath[PATH_MAX] = {0}, *dendptr = dpath;
+			if ((res = snprintf(dpath, PATH_MAX, "%s/", dest)) >= PATH_MAX || res < 0)
+			{
+				perror("snprintf copy rootfs dest");
+				exit(1);
+			}
 			dendptr += strlen(dest) + 1;
-			strcpy(dendptr, e->d_name);
+			strncpy(dendptr, e->d_name, PATH_MAX - strlen(dest) - 2); // same here as above
 
 			// Check if more than one hardlink exists
 			if (info.st_nlink > 1)
@@ -370,7 +385,11 @@ void copy_rootfs(const char *source, char *dest)
 					exit(1);
 				}
 				copy_rootfs(path, dpath);
-				chmod(dpath, info.st_mode);
+				if (chmod(dpath, info.st_mode) < 0)
+				{
+					perror("chmod copy rootfs");
+					exit(1);
+				}
 			}
 			else if (S_ISREG(info.st_mode))
 			{
@@ -380,7 +399,11 @@ void copy_rootfs(const char *source, char *dest)
 					perror("cp");
 					exit(1);
 				}
-				chmod(dpath, info.st_mode);
+				if (chmod(dpath, info.st_mode) < 0)
+				{
+					perror("chmod copy rootfs");
+					exit(1);
+				}
 				if (add_hardlink)
 				{
 					link_list_add(info.st_ino, dpath);
@@ -417,9 +440,14 @@ void setup_sandbox(const char *rootfs, const char *username)
 		exit(1);
 	}
 #else
-	char mount_dir[256] = {0};
+	char mount_dir[PATH_MAX] = {0};
+	int res = 0;
 	// creating the temp directory
-	snprintf(mount_dir, 256, "%s%s", TMP_DIR_NAME, username);
+	if ((res = snprintf(mount_dir, PATH_MAX, "%s%s", TMP_DIR_NAME, username)) >= PATH_MAX || res < 0)
+	{
+		perror("snprintf setup sendbox");
+		exit(1);
+	}
 
 	// check if folder exists
 	struct stat s;
@@ -450,8 +478,8 @@ void setup_sandbox(const char *rootfs, const char *username)
 	link_list_clear();
 
 	// copy /etc/resolv.conf
-	char path[256] = {0};
-	if (snprintf(path, 256, "%s/etc/resolv.conf", mount_dir) < 0)
+	char path[PATH_MAX] = {0};
+	if ((res = snprintf(path, PATH_MAX, "%s/etc/resolv.conf", mount_dir)) >= PATH_MAX || res < 0)
 	{
 		perror("snprintf resolv.conf");
 		exit(1);
@@ -481,13 +509,19 @@ void setup_sandbox(const char *rootfs, const char *username)
 void setup_id_maps(uid_t uid, gid_t gid)
 {
 	char buf[1024];
+	int res = 0;
 	uid_t newuid = 0;
 	gid_t newgid = 0;
 
 	debug("=> Mapping %d/%d to 0/0... ", uid, gid);
 
 	// map new UID/GID to outer UID/GID
-	snprintf(buf, 1024, "%d %d 1\n", newuid, uid);
+	if ((res = snprintf(buf, 1024, "%d %d 1\n", newuid, uid)) >= 1024 || res < 0)
+	{
+		perror("snprintf uidmap");
+		exit(1);
+	}
+
 	int fd = open("/proc/self/uid_map", O_WRONLY);
 	if (fd < 0)
 	{
@@ -512,7 +546,12 @@ void setup_id_maps(uid_t uid, gid_t gid)
 		write(fd, "deny", 4);
 		close(fd);
 	}
-	snprintf(buf, 1024, "%d %d 1\n", newgid, gid);
+	if ((res = snprintf(buf, 1024, "%d %d 1\n", newgid, gid)) >= 1024 || res < 0)
+	{
+		perror("snprintf gidmap");
+		exit(1);
+	}
+
 	fd = open("/proc/self/gid_map", O_WRONLY);
 	if (fd < 0)
 	{
@@ -531,8 +570,16 @@ void setup_id_maps(uid_t uid, gid_t gid)
 	}
 
 	//initially we're nobody, change to newgid/newuid
-	setresgid(newgid, newgid, newgid);
-	setresuid(newuid, newuid, newuid);
+	if (setresgid(newgid, newgid, newgid) < 0)
+	{
+		perror("setresgid");
+		exit(1);
+	}
+	if (setresuid(newuid, newuid, newuid) < 0)
+	{
+		perror("setresgid");
+		exit(1);
+	}
 
 	debug("done\n");
 }
@@ -652,11 +699,11 @@ void setup_home()
 	if (home == NULL)
 	{
 		// User has no home?
-		printf("user has no home.\n");
+		debug("user has no home.\n");
 		return;
 	}
 
-	if (mount(home, "root", NULL, MS_BIND, NULL))
+	if (mount(home, "root", NULL, MS_BIND, NULL) < 0)
 	{
 		perror("mount home");
 		exit(1);
@@ -695,11 +742,33 @@ void setup_proc()
 {
 	debug("=> Mounting old /proc... ");
 
-	rmdir(".oldproc");
-	rmdir("proc");
+	if (rmdir(".oldproc") < 0)
+	{
+		if (errno != ENOENT)
+		{
+			perror("rmdir oldproc");
+			exit(1);
+		}
+	}
+	if (rmdir("proc") < 0)
+	{
+		if (errno != ENOENT)
+		{
+			perror("rmdir proc");
+			exit(1);
+		}
+	}
 
-	mkdir(".oldproc", 0755); // We need the old proc to mount our new proc
-	mkdir("proc", 0755);
+	if (mkdir(".oldproc", 0755) < 0) // We need the old proc to mount our new proc
+	{
+		perror("mkdir oldproc");
+		exit(1);
+	}
+	if (mkdir("proc", 0755) < 0)
+	{
+		perror("mkdir proc");
+		exit(1);
+	}
 
 	if (mount("/proc", ".oldproc", NULL, MS_BIND | MS_REC, NULL) < 0)
 	{
@@ -715,8 +784,19 @@ void setup_root()
 	debug("=> Pivoting root... ");
 
 	// delete old dirs and create new ones
-	rmdir(".oldroot");
-	mkdir(".oldroot", 0755);
+	if (rmdir(".oldroot") < 0)
+	{
+		if (errno != ENOENT)
+		{
+			perror("rmdir oldroot");
+			exit(1);
+		}
+	}
+	if (mkdir(".oldroot", 0755) < 0)
+	{
+		perror("mkdir oldroot");
+		exit(1);
+	}
 
 	// Change root, keep old one
 	if (pivot_root(".", ".oldroot") < 0)
@@ -725,8 +805,20 @@ void setup_root()
 		exit(1);
 	}
 
-	umount2(".oldroot", MNT_DETACH);
-	rmdir(".oldroot");
+	if (umount2(".oldroot", MNT_DETACH) < 0)
+	{
+		perror("umount2 oldroot");
+		exit(1);
+	}
+
+	if (rmdir(".oldroot") < 0)
+	{
+		if (errno != ENOENT)
+		{
+			perror("rmdir oldroot");
+			exit(1);
+		}
+	}
 
 	debug("done\n");
 }
@@ -746,10 +838,12 @@ void setup_proc_2()
 	if (umount2("/.oldproc", MNT_DETACH) < 0)
 	{
 		perror("umount oldproc");
+		exit(1);
 	}
 	if (rmdir("/.oldproc") < 0)
 	{
 		perror("delete oldproc");
+		exit(1);
 	}
 
 	debug("done\n");
@@ -1010,6 +1104,11 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 	char *username = strdup(pw->pw_name);
+	if (username == NULL)
+	{
+		perror("strdup username");
+		exit(1);
+	}
 
 	char *rootfs;
 	rootfs = ROOTFS_LOCATION;
@@ -1135,6 +1234,11 @@ int main(int argc, char **argv)
 				exit(1);
 			}
 			shell = strdup(target);
+			if (shell == NULL)
+			{
+				perror("strdup shell");
+				exit(1);
+			}
 		}
 	no_shell:
 #if USE_TINI
