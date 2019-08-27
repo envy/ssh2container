@@ -1111,6 +1111,30 @@ int main(int argc, char **argv)
 			// This is ok, we are still inside the container, just not inside the home
 		}
 
+		// check if there is a .SHELL symlink in the users home
+		char *shell = SHELL;
+		struct stat s;
+		if (lstat(".SHELL", &s) < 0)
+		{
+			if (errno != ENOENT)
+			{
+				perror("lstat .SHELL");
+				exit(1);
+			}
+			goto no_shell;
+		}
+
+		if (S_ISLNK(s.st_mode))
+		{
+			char target[256] = {0};
+			if (readlink(".SHELL", target, 256) < 0)
+			{
+				perror("readlink");
+				exit(1);
+			}
+			shell = strdup(target);
+		}
+	no_shell:
 #if USE_TINI
 		// merge argv into _argv
 		argv++; // jump over binary name
@@ -1118,16 +1142,16 @@ int main(int argc, char **argv)
 		char **_argv;
 		if (*it == NULL)
 		{
-			// no arguments given, use normal /bin/ash
+			// no arguments given, use normal shell
 			_argv = calloc(4, sizeof(char *));
 			_argv[0] = INIT;
 			_argv[1] = "--";
-			_argv[2] = SHELL;
+			_argv[2] = shell;
 		}
 		else
 		{
 			// first, find out how many slots we need
-			int num = 4; // 3 for tini, -- and /bin/ash and 1 for trailing NULL
+			int num = 4; // 3 for tini, -- and shell and 1 for trailing NULL
 			while (*it != NULL)
 			{
 				num++;
@@ -1137,7 +1161,7 @@ int main(int argc, char **argv)
 			num = 3;
 			_argv[0] = INIT;
 			_argv[1] = "--";
-			_argv[2] = SHELL;
+			_argv[2] = shell;
 			it = argv;
 			while (*it != NULL)
 			{
@@ -1147,7 +1171,7 @@ int main(int argc, char **argv)
 		}
 #else
 		argv++;
-		char *_argv[] = {SHELL, NULL};
+		char *_argv[] = {shell, NULL};
 #endif
 
 		// and execute!
