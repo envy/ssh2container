@@ -71,7 +71,9 @@ void setup_namespaces()
 	namespaces |= CLONE_NEWPID; // New PID namespace, requires CAP_SYS_ADMIN
 	namespaces |= CLONE_NEWIPC; // New IPC namespace, requires CAP_SYS_ADMIN
 	namespaces |= CLONE_NEWNS; // New mount namespace, requires CAP_SYS_ADMIN
+#if !ROOTFS_PERSISTENT
 	namespaces |= CLONE_NEWUSER; // New user namespace, reqires CAP_SYS_ADMIN
+#endif
 	//namespaces |= CLONE_NEWCGROUP; // New cgroup namespace
 	//namespaces |= CLONE_NEWNET;  // New network namespace, requires CAP_SYS_ADMIN
 
@@ -1155,8 +1157,10 @@ int main(int argc, char **argv)
 	// setup namespaces
 	setup_namespaces();
 
+#if !ROOTFS_PERSISTENT
 	// setup id maps
 	setup_id_maps(uid, gid);
+#endif
 
 	//setup_cgroups(uid);
 
