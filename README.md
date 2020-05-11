@@ -55,3 +55,6 @@ A: NameSpace.
 Q: Do `rsync` and `scp` work?
 A: Yes.
 
+Q: What about sftp?
+A: Yes, but you need to make sure that the *outside* sshd has a sftp subsystem path that exists inside the container.
+
