@@ -653,6 +653,23 @@ void setup_fake_dev()
 		exit(1);
 	}
 
+	// Also link some others
+	if (symlink("/proc/self/fd/0", "dev/stdin"))
+	{
+		perror("symlink /dev/stdin");
+		exit(1);
+	}
+	if (symlink("/proc/self/fd/1", "dev/stdout"))
+	{
+		perror("symlink /dev/stdin");
+		exit(1);
+	}
+	if (symlink("/proc/self/fd/1", "dev/stderr"))
+	{
+		perror("symlink /dev/stdin");
+		exit(1);
+	}
+
 	// and remount readonly
 	if (mount("sandbox-dev", "dev", NULL, MS_REMOUNT | MS_BIND | MS_NOSUID | MS_NODEV | MS_NOEXEC | MS_NOATIME | MS_RDONLY, NULL) < 0)
 	{
