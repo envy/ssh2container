@@ -21,6 +21,7 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <systemd/sd-bus.h>
 #include <unistd.h>
 
 #define TMP_DIR_NAME "/tmp/container."
@@ -29,7 +30,9 @@
 #define ROOTFS_LOCATION ROOTFS_PREFIX "/" ROOTFS_FOLDER
 #define ROOTFS_SIZE "150m"
 #define ROOTFS_INODES "15k"
-#define MEMORY (1024 * 1024 * 1024) // 1GB
+#define CGROUP_BASE "/sys/fs/cgroup"
+#define MEMORY (1024ll * 1024 * 1024) // 1GB
+//#define MEMORY 4096
 #define SHELL "/bin/sh"
 #define INIT "/sbin/tini"
 
@@ -64,18 +67,109 @@ int pivot_root(const char *new_root, const char *put_old)
 	return syscall(SYS_pivot_root, new_root, put_old);
 }
 
+static sd_bus_error bus_error = SD_BUS_ERROR_NULL;
+static sd_bus *bus = NULL;
+
+void cleanup()
+{
+	sd_bus_error_free(&bus_error);
+	sd_bus_unref(bus);
+}
+
+void setup_dbus()
+{
+	debug("=> Connecting to D-Bus... ");
+
+	int r = 0;
+
+	if (getuid() == 0)
+	{
+		if ((r = sd_bus_open_system(&bus)) < 0)
+		{
+			fprintf(stderr, "sd_bus_open_system: %s\n", strerror(-r));
+			exit(1);
+		}
+		goto after_connect;
+	}
+
+	if ((r = sd_bus_open_user(&bus)) < 0)
+	{
+		fprintf(stderr, "sd_bus_default: %s\n", strerror(-r));
+		exit(1);
+	}
+
+after_connect:;
+	// Now create a transient slice
+	char *slicename;
+	asprintf(&slicename, "ssh2container-%d.slice", getpid());
+	debug("Creating slice %s...", slicename);
+
+	sd_bus_message *msg = NULL;
+	if ((r = sd_bus_call_method(bus, "org.freedesktop.systemd1", "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager", "StartTransientUnit", &bus_error, &msg,
+	                            "ssa(sv)a(sa(sv))",
+	                            slicename,
+	                            "fail",
+	                            1,
+	                            "Description", "s", "ssh2container slice",
+//	                            "CPUAccounting", "b", 1,
+//	                            "MemoryAccounting", "b", 1,
+	                            0)) < 0)
+	{
+		fprintf(stderr, "call StartTransientUnit: %s / %s: %s\n", strerror(-r), bus_error.name, bus_error.message);
+		exit(1);
+	}
+
+	const char *path;
+	if ((r = sd_bus_message_read(msg, "o", &path)) < 0)
+	{
+		fprintf(stderr, "read StartTransientUnit: %s\n", strerror(-r));
+		exit(1);
+	}
+	sd_bus_message_unref(msg);
+
+	char *servicename;
+	asprintf(&servicename, "ssh2container-%d.scope", getpid());
+	debug("Creating service %s...", servicename);
+	if ((r = sd_bus_call_method(bus, "org.freedesktop.systemd1", "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager", "StartTransientUnit", &bus_error, &msg,
+	                            "ssa(sv)a(sa(sv))",
+	                            servicename,
+	                            "fail",
+	                            4,
+	                            "Description", "s", "ssh2container scope",
+	                            "Delegate", "b", 1,
+	                            "Slice", "s", slicename,
+	                            "PIDs", "au", 1, getpid(),
+	                            0)) < 0)
+	{
+		fprintf(stderr, "call StartTransientUnit: %s / %s: %s\n", strerror(-r), bus_error.name, bus_error.message);
+		exit(1);
+	}
+
+	if ((r = sd_bus_message_read(msg, "o", &path)) < 0)
+	{
+		fprintf(stderr, "read StartTransientUnit: %s\n", strerror(-r));
+		exit(1);
+	}
+
+	sd_bus_message_unref(msg);
+
+	free(slicename);
+	free(servicename);
+	debug("done\n");
+}
+
 void setup_namespaces()
 {
 	int namespaces = 0;
-	namespaces |= CLONE_NEWUTS; // New UTS namespace (hostname, domainname)
-	namespaces |= CLONE_NEWPID; // New PID namespace, requires CAP_SYS_ADMIN
-	namespaces |= CLONE_NEWIPC; // New IPC namespace, requires CAP_SYS_ADMIN
-	namespaces |= CLONE_NEWNS; // New mount namespace, requires CAP_SYS_ADMIN
+	namespaces |= CLONE_NEWUTS; // New UTS namespace
+	namespaces |= CLONE_NEWPID; // New PID namespace
+	namespaces |= CLONE_NEWIPC; // New IPC namespace
+	namespaces |= CLONE_NEWNS; // New mount namespace
 #if !ROOTFS_PERSISTENT
-	namespaces |= CLONE_NEWUSER; // New user namespace, reqires CAP_SYS_ADMIN
+	namespaces |= CLONE_NEWUSER; // New user namespace
 #endif
-	//namespaces |= CLONE_NEWCGROUP; // New cgroup namespace
-	//namespaces |= CLONE_NEWNET;  // New network namespace, requires CAP_SYS_ADMIN
+	//namespaces |= CLONE_NEWCGROUP; // New cgroup namespace, done somewhere else
+	//namespaces |= CLONE_NEWNET;  // New network namespace
 
 	debug("=> Creating namespaces... ");
 
@@ -98,15 +192,24 @@ void write_to_file(const char *path, const char *content)
 		exit(1);
 	}
 
-	int offset = 0, last = 0;
-	while ((last = write(fd, content + offset, strlen(content) - offset)) > 0)
+	debug("writing \"%s\"\n", content);
+
+	errno = 0;
+	int offset = 0, last = 0, length = strlen(content);
+	while ((last = write(fd, content + offset, length - offset)) > 0)
 	{
+		debug("only written %u\n", last);
 		offset += last;
+		if (offset == length)
+		{
+			break;
+		}
 	}
 	if (last <= 0)
 	{
 		if (errno != 0)
 		{
+			debug("Error writing to %s\n", path);
 			perror("write");
 			exit(1);
 		}
@@ -119,45 +222,53 @@ void setup_cgroups(uid_t uid)
 {
 	debug("=> Setting up cgroups2... ");
 
-	char path[256];
-	if (snprintf(path, 256, "/sys/fs/cgroup/unified/user.slice/user-%d.slice/user@%d.service", uid, uid) < 0)
+	char path[1024];
+	if (uid == 0)
 	{
-		perror("snprintf cgroups path");
-		exit(1);
+		if (snprintf(path, 1024, CGROUP_BASE "/ssh2container.slice/ssh2container-%d.slice", getpid()) < 0)
+		{
+			perror("snprintf cgroups path");
+			exit(1);
+		}
+	}
+	else
+	{
+		if (snprintf(path, 1024, CGROUP_BASE "/user.slice/user-%d.slice/user@%d.service/ssh2container.slice/ssh2container-%d.slice", uid, uid, getpid()) < 0)
+		{
+			perror("snprintf cgroups path");
+			exit(1);
+		}
 	}
 
-	debug("cgroups base path: %s ", path);
+	debug("cgroups base path: %s\n", path);
 
 	char *curpath = NULL;
-	asprintf(&curpath, "%s/ssh2container", path);
-	if (mkdir(curpath, 0755) < 0)
-	{
-		if (errno != EEXIST)
-		{
-			debug("could not create %s\n", curpath);
-			perror("mkdir cgroup parent");
-			exit(1);
-		}
-	}
+	// enable memory controller
+	debug("Enabling memory controller\n");
+	free(curpath);
+	asprintf(&curpath, "%s/cgroup.subtree_control", path);
+	char *controllerstring;
+	asprintf(&controllerstring, "+memory\n");
+	write_to_file(curpath, controllerstring);
+	free(controllerstring);
 
+	// set high
+	debug("Setting high memory: %llu\n", MEMORY);
 	free(curpath);
-	asprintf(&curpath, "%s/ssh2container/container-%d", path, getpid());
-	if (mkdir(curpath, 0755) < 0)
-	{
-		if (errno != EEXIST)
-		{
-			perror("mkdir cgroup child");
-			exit(1);
-		}
-	}
-	free(curpath);
+	asprintf(&curpath, "%s/ssh2container-%d.scope/memory.high", path, getpid());
+	char *highmemorystring;
+	asprintf(&highmemorystring, "%llu\n", MEMORY);
+	write_to_file(curpath, highmemorystring);
+	free(highmemorystring);
 
-	char *pidstring;
-	asprintf(&pidstring, "0\n");
-	asprintf(&curpath, "%s/ssh2container/container-%d/cgroup.procs", path, getpid());
-	write_to_file(curpath, pidstring);
-	free(pidstring);
+	// set maximum
+	debug("Setting maximum memory: %llu\n", MEMORY);
 	free(curpath);
+	asprintf(&curpath, "%s/ssh2container-%d.scope/memory.max", path, getpid());
+	char *maxmemorystring;
+	asprintf(&maxmemorystring, "%llu\n", MEMORY);
+	write_to_file(curpath, maxmemorystring);
+	free(maxmemorystring);
 
 	if (unshare(CLONE_NEWCGROUP) != 0)
 	{
@@ -165,6 +276,7 @@ void setup_cgroups(uid_t uid)
 		exit(1);
 	}
 
+	free(curpath);
 	debug("done\n");
 }
 
@@ -172,7 +284,35 @@ void setup_cgroups_2()
 {
 	debug("Finish cgroups setup... ");
 
-	if (mount("none", "/sys", "cgroup2", 0, NULL) < 0)
+
+	if (mkdir("/sys", 0755) < 0)
+	{
+		if (errno != EEXIST)
+		{
+			perror("mkdir /sys");
+			exit(1);
+		}
+	}
+
+	if (mkdir("/sys/fs", 0755) < 0)
+	{
+		if (errno != EEXIST)
+		{
+			perror("mkdir /sys/fs");
+			exit(1);
+		}
+	}
+
+	if (mkdir("/sys/fs/cgroup", 0755) < 0)
+	{
+		if (errno != EEXIST)
+		{
+			perror("mkdir /sys/fs/cgroup");
+			exit(1);
+		}
+	}
+
+	if (mount("sandbox-cgroup", "/sys/fs/cgroup", "cgroup2", 0, NULL) < 0)
 	{
 		perror("mount cgroup");
 		exit(1);
@@ -622,6 +762,11 @@ void setup_fake_dev()
 		perror("mknod dev/zero");
 		exit(1);
 	}
+	if (mknod("dev/full", S_IFREG | 0666, 0) < 0)
+	{
+		perror("mknod dev/full");
+		exit(1);
+	}
 	if (mknod("dev/random", S_IFREG | 0666, 0) < 0)
 	{
 		perror("mknod dev/random");
@@ -642,6 +787,11 @@ void setup_fake_dev()
 	if (mount("/dev/zero", "dev/zero", NULL, MS_BIND, NULL) < 0)
 	{
 		perror("mount /dev/zero");
+		exit(1);
+	}
+	if (mount("/dev/full", "dev/full", NULL, MS_BIND, NULL) < 0)
+	{
+		perror("mount /dev/full");
 		exit(1);
 	}
 	if (mount("/dev/random", "dev/random", NULL, MS_BIND, NULL) < 0)
@@ -748,7 +898,7 @@ void setup_mnt()
 		exit(1);
 	}
 
-	if (mount("/mnt", "mnt", NULL, MS_BIND, "ro") < 0)
+	if (mount("/mnt", "mnt", NULL, MS_BIND | MS_RDONLY, NULL) < 0)
 	{
 		perror("mount mnt");
 		exit(1);
@@ -847,7 +997,7 @@ void setup_proc_2()
 	debug("=> Mounting new /proc... ");
 
 	// mount proc for correct pids
-	if (mount("sandbox-proc", "/proc", "proc", MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL) < 0)
+	if (mount("sandbox-proc", "/proc", "proc", MS_NOSUID | MS_NOEXEC | MS_NODEV | MS_RDONLY, NULL) < 0)
 	{
 		perror("mount proc");
 		exit(1);
@@ -889,26 +1039,6 @@ void mask_proc()
 	{
 		perror("sched_debug mask");
 		exit(1);
-	}
-
-	debug("done\n");
-}
-
-void restrict_resources()
-{
-	debug("=> Restricting resource usage... ");
-
-	struct rlimit memlimit;
-	memlimit.rlim_cur = MEMORY;
-	memlimit.rlim_max = MEMORY;
-
-	if (setrlimit(RLIMIT_AS, &memlimit) < 0)
-	{
-		perror("setrlimit");
-	}
-	if (setrlimit(RLIMIT_DATA, &memlimit) < 0)
-	{
-		perror("setrlimit");
 	}
 
 	debug("done\n");
@@ -1129,6 +1259,8 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
+	atexit(cleanup);
+
 	char *rootfs;
 	rootfs = ROOTFS_LOCATION;
 
@@ -1154,6 +1286,9 @@ int main(int argc, char **argv)
 	debug("\n");
 #endif
 
+	// setup dbus
+	setup_dbus();
+
 	// setup namespaces
 	setup_namespaces();
 
@@ -1162,7 +1297,10 @@ int main(int argc, char **argv)
 	setup_id_maps(uid, gid);
 #endif
 
-	//setup_cgroups(uid);
+#if !ROOTFS_PERSISTENT
+	// setup cgroups
+	setup_cgroups(uid);
+#endif
 
 	// setup sandbox
 	setup_sandbox(rootfs, username);
@@ -1211,7 +1349,9 @@ int main(int argc, char **argv)
 			exit(1);
 		}
 
-		restrict_resources();
+#if !ROOTFS_PERSISTENT
+		setup_cgroups_2();
+#endif
 
 		filter_syscalls();
 

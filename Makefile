@@ -1,5 +1,5 @@
 CFLAGS=-g -O0 -fPIE -Wall -Wextra
-LDFLAGS=-lcap -lseccomp
+LDFLAGS=-lcap -lseccomp -lsystemd
 
 all: ns ns-debug ns-persistent
 
