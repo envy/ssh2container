@@ -5,6 +5,13 @@ Useable as a login shell which spawns a container for each login. Containers are
 This uses user, mount, IPC, PID and UTS namespaces, a tmpfs and a tiny rootfs (e.g. alpine linux) as a base image. It does not require root.
 Certain system calls are filtered with seccomp and capabilities are dropped with libcap.
 
+cgroups2
+--------
+
+This code uses cgroups2 to restrict the container memory.
+Make sure the memory controller is available in cgroups2.
+Or better, only use cgroups2 by adding `systemd.unified_cgroup_hierarchy=1` to your kernel command line, e.g., in `/etc/default/grub` on Debian.
+Also make sure normal users have DBUS access (install `dbus-user-session` on Debian).
 
 How to use
 ----------
@@ -39,9 +46,6 @@ A: I don't know. Maybe, maybe not. You should probably not run this in productio
 
 Q: Why no network namespaces?
 A: You can easily add a `CLONE_NET` to the unshare call. However, then your container will not have network functionality which maybe is something you want. If you want network namespaces and connectivity then a veth pair and bridge on the host side would be required. Probably also a DHCP server. This is too much hassle imho.
-
-Q: Why no cgroups?
-A: Because I have not figured out yet how to tell systemd on Debian 10 to only mount cgroups2 instead of this shitty hybrid mode and then use the user-slice. There is some experimental code there that is not called and also not working.
 
 Q: Isn't there a risk of DDOS if all containers live in memory and every login spawns a new container?
 A: Yes. But even if they would live on the filesystem then at some point the disk would run full with enough simultaneous logins.
