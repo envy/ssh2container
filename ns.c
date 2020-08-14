@@ -129,7 +129,7 @@ after_connect:;
 
 	char *servicename;
 	asprintf(&servicename, "ssh2container-%d.scope", getpid());
-	debug("Creating service %s...", servicename);
+	debug("Creating scope %s...", servicename);
 	if ((r = sd_bus_call_method(bus, "org.freedesktop.systemd1", "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager", "StartTransientUnit", &bus_error, &msg,
 	                            "ssa(sv)a(sa(sv))",
 	                            servicename,
@@ -165,11 +165,7 @@ void setup_namespaces()
 	namespaces |= CLONE_NEWPID; // New PID namespace
 	namespaces |= CLONE_NEWIPC; // New IPC namespace
 	namespaces |= CLONE_NEWNS; // New mount namespace
-#if !ROOTFS_PERSISTENT
 	namespaces |= CLONE_NEWUSER; // New user namespace
-#endif
-	//namespaces |= CLONE_NEWCGROUP; // New cgroup namespace, done somewhere else
-	//namespaces |= CLONE_NEWNET;  // New network namespace
 
 	debug("=> Creating namespaces... ");
 
@@ -192,13 +188,10 @@ void write_to_file(const char *path, const char *content)
 		exit(1);
 	}
 
-	debug("writing \"%s\"\n", content);
-
 	errno = 0;
 	int offset = 0, last = 0, length = strlen(content);
 	while ((last = write(fd, content + offset, length - offset)) > 0)
 	{
-		debug("only written %u\n", last);
 		offset += last;
 		if (offset == length)
 		{
@@ -222,7 +215,7 @@ void setup_cgroups(uid_t uid)
 {
 	debug("=> Setting up cgroups2... ");
 
-	char path[1024];
+	char path[1024] = {};
 	if (uid == 0)
 	{
 		if (snprintf(path, 1024, CGROUP_BASE "/ssh2container.slice/ssh2container-%d.slice", getpid()) < 0)
@@ -237,6 +230,28 @@ void setup_cgroups(uid_t uid)
 		{
 			perror("snprintf cgroups path");
 			exit(1);
+		}
+	}
+
+	char scopepath[1024] = {};
+	if (snprintf(scopepath, 1024, "%s/ssh2container-%d.scope", path, getpid()) < 0)
+	{
+		perror("snprintf cgroups scope path");
+		exit(1);
+	}
+
+	debug("Waiting for scope ");
+	while (1)
+	{
+		DIR *dir = opendir(scopepath);
+		if (dir)
+		{
+			debug("\n");
+			break;
+		}
+		else if (ENOENT == errno)
+		{
+			debug(".");
 		}
 	}
 
@@ -1292,10 +1307,8 @@ int main(int argc, char **argv)
 	// setup namespaces
 	setup_namespaces();
 
-#if !ROOTFS_PERSISTENT
 	// setup id maps
 	setup_id_maps(uid, gid);
-#endif
 
 #if !ROOTFS_PERSISTENT
 	// setup cgroups
