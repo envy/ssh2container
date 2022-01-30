@@ -1388,6 +1388,7 @@ int main(int argc, char **argv)
 
 		// check if there is a .SHELL symlink in the users home
 		char *shell = SHELL;
+#if !ROOTFS_PERSISTENT
 		struct stat s;
 		if (lstat(".SHELL", &s) < 0)
 		{
@@ -1415,6 +1416,7 @@ int main(int argc, char **argv)
 			}
 		}
 	no_shell:
+#endif
 #if USE_TINI
 		// merge argv into _argv
 		argv++; // jump over binary name
@@ -1455,7 +1457,7 @@ int main(int argc, char **argv)
 #endif
 
 		// and execute!
-		debug("=> Executing, see you on the other side\n");
+		debug("=> Executing %s, see you on the other side\n", _argv[0]);
 		if (execve(_argv[0], _argv, envp) < 0)
 		{
 			perror("execve");
